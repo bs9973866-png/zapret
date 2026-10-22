@@ -101,26 +101,16 @@ internal sealed class DpiEngine : IDisposable
         {
             addressPointer = Marshal.AllocHGlobal(AddressBufferSize);
             var addressBytes = new byte[AddressBufferSize];
-            var broadFilter = "outbound and !impostor and tcp.DstPort == 443 and tcp.PayloadLength >= 6";
             string filter = BuildFilter(_targetIps);
             IntPtr handle = WinDivertNative.WinDivertOpen(filter, NetworkLayer, 0, 0);
 
             if (handle == new IntPtr(-1) || handle == IntPtr.Zero)
             {
                 int code = Marshal.GetLastWin32Error();
-                // IPv6 literals or a large filter can fail compilation on some driver builds.
-                // Retry a valid, broad filter; userspace still restricts modifications to resolved targets.
-                if (code == 87 && !filter.Equals(broadFilter, StringComparison.Ordinal))
-                {
-                    handle = WinDivertNative.WinDivertOpen(broadFilter, NetworkLayer, 0, 0);
-                    if (handle == new IntPtr(-1) || handle == IntPtr.Zero)
-                        code = Marshal.GetLastWin32Error();
-                    else
-                        _lastStatus = "Запущен безопасный резервный фильтр";
-                }
-
-                if (handle == new IntPtr(-1) || handle == IntPtr.Zero)
-                    throw new Win32Exception(code, ExplainWinDivertError(code));
+                // Fail closed: never replace a precise host filter with a broad TCP/443 filter.
+                // A failed filter must not intercept all HTTPS traffic.
+                throw new Win32Exception(code, ExplainWinDivertError(code)
+                    + "\n\nТочный фильтр не запустился. Интернет оставлен без перехвата; сократи количество категорий доменов и попробуй снова.");
             }
 
             openedHandle = handle;
@@ -210,21 +200,22 @@ internal sealed class DpiEngine : IDisposable
         }
     }
 
+    private const int MaxFilteredIps = 128;
+
     private static string BuildFilter(IEnumerable<IPAddress> targetIps)
     {
-        IPAddress[] uniqueIps = targetIps.Distinct().ToArray();
-        if (uniqueIps.Length > 350)
-            return "outbound and !impostor and tcp.DstPort == 443 and tcp.PayloadLength >= 6";
-
-        string[] terms = uniqueIps
-            .Take(350)
+        // A strict cap keeps the filter compact. Any additional resolved CDN IPs are simply
+        // not modified; never fall back to intercepting all outbound HTTPS.
+        string[] terms = targetIps
+            .Distinct()
+            .Take(MaxFilteredIps)
             .Select(ip => ip.AddressFamily == AddressFamily.InterNetwork
                 ? $"ip.DstAddr == {ip}"
                 : $"ipv6.DstAddr == {ip}")
             .ToArray();
 
         if (terms.Length == 0)
-            return "outbound and !impostor and tcp.DstPort == 443 and tcp.PayloadLength >= 6";
+            throw new InvalidOperationException("В фильтре нет IP-адресов выбранных доменов.");
 
         return $"outbound and !impostor and tcp.DstPort == 443 and tcp.PayloadLength >= 6 and ({string.Join(" or ", terms)})";
     }
