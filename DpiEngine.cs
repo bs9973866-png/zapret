@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -51,7 +52,7 @@ internal sealed class DpiEngine : IDisposable
 
             _targetIps = new HashSet<IPAddress>(targetIps);
             _domains = new HashSet<string>(selectedDomains, StringComparer.OrdinalIgnoreCase);
-            _splitAfterBytes = Math.Clamp(splitAfterBytes, 1, 8);
+            _splitAfterBytes = splitAfterBytes == 0 ? 0 : Math.Clamp(splitAfterBytes, 1, 8);
             _stopping = false;
             _lastStatus = "Запуск драйвера...";
             _packetsSeen = 0;
@@ -171,10 +172,9 @@ internal sealed class DpiEngine : IDisposable
                     }
 
                     _lastStatus = $"Не удалось повторно отправить сегмент (Win32 {Marshal.GetLastWin32Error()})";
-                    // If the first half was not sent, re-send the original packet. If it was sent,
-                    // re-sending the full packet would duplicate stream bytes, so do not do that.
-                    if (!firstSent)
-                        SendPacket(handle, packet, addressBytes, addressPointer, false);
+                    // A retransmitted original segment uses the same TCP sequence range; the receiver
+                    // de-duplicates overlapping bytes, allowing it to recover if injection partially failed.
+                    SendPacket(handle, packet, addressBytes, addressPointer, false);
                     continue;
                 }
 
@@ -212,8 +212,11 @@ internal sealed class DpiEngine : IDisposable
 
     private static string BuildFilter(IEnumerable<IPAddress> targetIps)
     {
-        string[] terms = targetIps
-            .Distinct()
+        IPAddress[] uniqueIps = targetIps.Distinct().ToArray();
+        if (uniqueIps.Length > 350)
+            return "outbound and tcp.DstPort == 443 and tcp.PayloadLength >= 6";
+
+        string[] terms = uniqueIps
             .Take(350)
             .Select(ip => ip.AddressFamily == AddressFamily.InterNetwork
                 ? $"ip.DstAddr == {ip}"
@@ -353,13 +356,14 @@ internal sealed class DpiEngine : IDisposable
 
         // The prefix contains the TLS record header plus 1..8 bytes of the handshake header.
         // This is a packet segmentation technique only; it does not provide encryption or a VPN.
-        int firstPayloadLength = Math.Min(5 + _splitAfterBytes, payloadLength - 1);
+        int splitAfter = _splitAfterBytes == 0 ? Random.Shared.Next(1, 9) : _splitAfterBytes;
+        int firstPayloadLength = Math.Min(5 + splitAfter, payloadLength - 1);
         int splitAt = p + firstPayloadLength;
         if (splitAt <= p + 5 || splitAt >= view.PacketEnd)
             return false;
 
         first = packet[..splitAt];
-        second = new byte[p + payloadLength - splitAt];
+        second = new byte[p + payloadLength - firstPayloadLength];
         Buffer.BlockCopy(packet, 0, second, 0, p);
         Buffer.BlockCopy(packet, splitAt, second, p, packet.Length - splitAt);
 
