@@ -264,7 +264,7 @@ internal sealed class MainForm : Form
         _customDomains.Height = 82;
         right.Controls.Add(_customDomains);
 
-        var safety = MakeLabel("Метод: сегментация ClientHello. Поддерживается обычный TLS по TCP/443 с SNI в первом пакете. ECH, QUIC/HTTP3 и ClientHello, уже разбитые ОС на несколько пакетов, не обрабатываются.", 9, Muted);
+        var safety = MakeLabel("Метод: сегментация ClientHello по TCP/443. Если SNI виден целиком, сверяется с выбранными доменами; если TLS-запись уже разбита ОС, используется IP-фильтр DNS. ECH и QUIC/HTTP3 не обрабатываются. Общие CDN-IP могут попадать шире.", 9, Muted);
         safety.Dock = DockStyle.Top;
         safety.Height = 58;
         right.Controls.Add(safety);
