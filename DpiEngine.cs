@@ -101,7 +101,7 @@ internal sealed class DpiEngine : IDisposable
         {
             addressPointer = Marshal.AllocHGlobal(AddressBufferSize);
             var addressBytes = new byte[AddressBufferSize];
-            string filter = BuildFilter(_targetIps);
+            string filter = BuildFilter();
             IntPtr handle = WinDivertNative.WinDivertOpen(filter, NetworkLayer, 0, 0);
 
             if (handle == new IntPtr(-1) || handle == IntPtr.Zero)
@@ -200,24 +200,14 @@ internal sealed class DpiEngine : IDisposable
         }
     }
 
-    private const int MaxFilteredIps = 128;
-
-    private static string BuildFilter(IEnumerable<IPAddress> targetIps)
+    private static string BuildFilter()
     {
-        // A strict cap keeps the filter compact. Any additional resolved CDN IPs are simply
-        // not modified; never fall back to intercepting all outbound HTTPS.
-        string[] terms = targetIps
-            .Distinct()
-            .Take(MaxFilteredIps)
-            .Select(ip => ip.AddressFamily == AddressFamily.InterNetwork
-                ? $"ip.DstAddr == {ip}"
-                : $"ipv6.DstAddr == {ip}")
-            .ToArray();
-
-        if (terms.Length == 0)
-            throw new InvalidOperationException("В фильтре нет IP-адресов выбранных доменов.");
-
-        return $"outbound and !impostor and tcp.DstPort == 443 and tcp.PayloadLength >= 6 and ({string.Join(" or ", terms)})";
+        // WinDivert filters have a small compiled-instruction limit. Inspect only the first
+        // TLS ClientHello packet candidates here; userspace checks resolved destination IPs
+        // and parses SNI before changing anything. This avoids large IP filters and never
+        // captures every packet in an HTTPS connection.
+        return "outbound and !impostor and tcp.DstPort == 443 and tcp.PayloadLength >= 9 "
+            + "and tcp.Payload[0] == 22 and tcp.Payload[1] == 3 and tcp.Payload[5] == 1";
     }
 
     private static string ExplainWinDivertError(int code) => code switch
