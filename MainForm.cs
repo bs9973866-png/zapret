@@ -77,7 +77,15 @@ internal sealed class MainForm : Form
         {
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             using var p = new Pen(Accent, 2);
-            e.Graphics.DrawRoundedRectangle(p, new Rectangle(2, 2, logo.Width - 5, logo.Height - 5), 15);
+            using var path = new System.Drawing.Drawing2D.GraphicsPath();
+            var rect = new Rectangle(2, 2, logo.Width - 5, logo.Height - 5);
+            int radius = 15;
+            path.AddArc(rect.X, rect.Y, radius * 2, radius * 2, 180, 90);
+            path.AddArc(rect.Right - radius * 2, rect.Y, radius * 2, radius * 2, 270, 90);
+            path.AddArc(rect.Right - radius * 2, rect.Bottom - radius * 2, radius * 2, radius * 2, 0, 90);
+            path.AddArc(rect.X, rect.Bottom - radius * 2, radius * 2, radius * 2, 90, 90);
+            path.CloseFigure();
+            e.Graphics.DrawPath(p, path);
             using var f = new Font("Segoe UI Black", 28, FontStyle.Bold);
             TextRenderer.DrawText(e.Graphics, "Z", f, new Rectangle(0, -1, logo.Width, logo.Height),
                 Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
