@@ -77,7 +77,7 @@ internal sealed class DpiEngine : IDisposable
 
         if (handle != IntPtr.Zero)
         {
-            try { WinDivertNative.WinDivertShutdown(handle, 2); } catch { }
+            try { WinDivertNative.WinDivertShutdown(handle, 1); } catch { }
         }
 
         if (_worker is not null)
@@ -89,19 +89,19 @@ internal sealed class DpiEngine : IDisposable
 
         lock (_gate)
         {
-            _handle = IntPtr.Zero;
-            _lastStatus = "Остановлено";
+            _lastStatus = _handle == IntPtr.Zero ? "Остановлено" : "Остановка обработчика…";
         }
     }
 
     private void PacketLoop(TaskCompletionSource ready)
     {
         IntPtr addressPointer = IntPtr.Zero;
+        IntPtr openedHandle = IntPtr.Zero;
         try
         {
             addressPointer = Marshal.AllocHGlobal(AddressBufferSize);
             var addressBytes = new byte[AddressBufferSize];
-            var broadFilter = "outbound and tcp.DstPort == 443 and tcp.PayloadLength >= 6";
+            var broadFilter = "outbound and !impostor and tcp.DstPort == 443 and tcp.PayloadLength >= 6";
             string filter = BuildFilter(_targetIps);
             IntPtr handle = WinDivertNative.WinDivertOpen(filter, NetworkLayer, 0, 0);
 
@@ -123,6 +123,7 @@ internal sealed class DpiEngine : IDisposable
                     throw new Win32Exception(code, ExplainWinDivertError(code));
             }
 
+            openedHandle = handle;
             lock (_gate) _handle = handle;
             if (string.IsNullOrWhiteSpace(_lastStatus) || _lastStatus == "Запуск драйвера...")
                 _lastStatus = $"Активен • IP-адресов: {_targetIps.Count}";
@@ -141,7 +142,7 @@ internal sealed class DpiEngine : IDisposable
                 if (!received)
                 {
                     int error = Marshal.GetLastWin32Error();
-                    if (_stopping || error is 6 or 995)
+                    if (_stopping || error is 6 or 995 or 232)
                         break;
 
                     _lastStatus = $"WinDivertRecv: ошибка {error}";
@@ -191,11 +192,11 @@ internal sealed class DpiEngine : IDisposable
         }
         finally
         {
-            IntPtr handle;
+            IntPtr handle = openedHandle;
             lock (_gate)
             {
-                handle = _handle;
-                _handle = IntPtr.Zero;
+                if (_handle == openedHandle)
+                    _handle = IntPtr.Zero;
             }
             if (handle != IntPtr.Zero && handle != new IntPtr(-1))
             {
@@ -214,7 +215,7 @@ internal sealed class DpiEngine : IDisposable
     {
         IPAddress[] uniqueIps = targetIps.Distinct().ToArray();
         if (uniqueIps.Length > 350)
-            return "outbound and tcp.DstPort == 443 and tcp.PayloadLength >= 6";
+            return "outbound and !impostor and tcp.DstPort == 443 and tcp.PayloadLength >= 6";
 
         string[] terms = uniqueIps
             .Take(350)
@@ -226,7 +227,7 @@ internal sealed class DpiEngine : IDisposable
         if (terms.Length == 0)
             return "outbound and tcp.DstPort == 443 and tcp.PayloadLength >= 6";
 
-        return $"outbound and tcp.DstPort == 443 and tcp.PayloadLength >= 6 and ({string.Join(" or ", terms)})";
+        return $"outbound and !impostor and tcp.DstPort == 443 and tcp.PayloadLength >= 6 and ({string.Join(" or ", terms)})";
     }
 
     private static string ExplainWinDivertError(int code) => code switch
@@ -348,23 +349,16 @@ internal sealed class DpiEngine : IDisposable
         if (handshakeLength < 4 || tlsRecordLength < 4)
             return false;
 
-        bool recordFitsPacket = tlsRecordLength + 5 <= payloadLength;
-        if (recordFitsPacket)
-        {
-            if (handshakeLength + 4 > tlsRecordLength)
-                return false;
+        // Strict fail-open: if ClientHello/SNI isn't fully visible in this packet, pass it unchanged.
+        // Never segment a partial ClientHello based only on destination IP; CDNs share addresses.
+        if (tlsRecordLength + 5 > payloadLength || handshakeLength + 4 > tlsRecordLength)
+            return false;
 
-            // When the complete ClientHello is visible, require its SNI to match the selected hostlist.
-            if (!TryReadSni(packet, p, tlsRecordLength, out string? sni) || !IsSelectedDomain(sni))
-            {
-                Interlocked.Increment(ref _unmatchedHello);
-                return false;
-            }
+        if (!TryReadSni(packet, p, tlsRecordLength, out string? sni) || !IsSelectedDomain(sni))
+        {
+            Interlocked.Increment(ref _unmatchedHello);
+            return false;
         }
-        // If the OS already split this ClientHello across TCP packets, its SNI is not fully visible
-        // here. The packet was captured only because its destination IP was resolved from a selected
-        // domain. Use this IP-based fallback rather than silently skipping all segmented hellos.
-        // On shared CDN IPs this is broader than exact-SNI matching, so the UI warns about it.
 
         // The prefix contains the TLS record header plus 1..8 bytes of the handshake header.
         // This is a packet segmentation technique only; it does not provide encryption or a VPN.
