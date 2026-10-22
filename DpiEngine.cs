@@ -206,8 +206,7 @@ internal sealed class DpiEngine : IDisposable
             if (addressPointer != IntPtr.Zero)
                 Marshal.FreeHGlobal(addressPointer);
 
-            if (!_stopping)
-                _lastStatus = "Обработчик остановлен из-за ошибки";
+            _lastStatus = _stopping ? "Остановлено" : "Обработчик остановлен из-за ошибки";
         }
     }
 
@@ -225,7 +224,7 @@ internal sealed class DpiEngine : IDisposable
             .ToArray();
 
         if (terms.Length == 0)
-            return "outbound and tcp.DstPort == 443 and tcp.PayloadLength >= 6";
+            return "outbound and !impostor and tcp.DstPort == 443 and tcp.PayloadLength >= 6";
 
         return $"outbound and !impostor and tcp.DstPort == 443 and tcp.PayloadLength >= 6 and ({string.Join(" or ", terms)})";
     }
