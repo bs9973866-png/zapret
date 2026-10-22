@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon Condition="Exists('assets\zflow.ico')">assets\zflow.ico</ApplicationIcon>
+    <AssemblyName>ZFlow</AssemblyName>
+    <RootNamespace>ZFlow</RootNamespace>
+    <Version>0.1.0</Version>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="native\WinDivert.dll" LogicalName="ZFlow.Native.WinDivert.dll" Condition="Exists('native\WinDivert.dll')" />
+    <EmbeddedResource Include="native\WinDivert64.sys" LogicalName="ZFlow.Native.WinDivert64.sys" Condition="Exists('native\WinDivert64.sys')" />
+    <EmbeddedResource Include="native\LICENSE.txt" LogicalName="ZFlow.Native.LICENSE.txt" Condition="Exists('native\LICENSE.txt')" />
+  </ItemGroup>
+</Project>
