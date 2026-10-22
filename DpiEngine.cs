@@ -341,18 +341,30 @@ internal sealed class DpiEngine : IDisposable
             return false;
 
         int tlsRecordLength = BinaryPrimitives.ReadUInt16BigEndian(packet.AsSpan(p + 3, 2));
-        if (tlsRecordLength < 4 || tlsRecordLength + 5 > payloadLength)
+        if (tlsRecordLength < 4)
             return false;
 
         int handshakeLength = (packet[p + 6] << 16) | (packet[p + 7] << 8) | packet[p + 8];
-        if (handshakeLength + 4 > tlsRecordLength)
+        if (handshakeLength < 4 || tlsRecordLength < 4)
             return false;
 
-        if (!TryReadSni(packet, p, tlsRecordLength, out string? sni) || !IsSelectedDomain(sni))
+        bool recordFitsPacket = tlsRecordLength + 5 <= payloadLength;
+        if (recordFitsPacket)
         {
-            Interlocked.Increment(ref _unmatchedHello);
-            return false;
+            if (handshakeLength + 4 > tlsRecordLength)
+                return false;
+
+            // When the complete ClientHello is visible, require its SNI to match the selected hostlist.
+            if (!TryReadSni(packet, p, tlsRecordLength, out string? sni) || !IsSelectedDomain(sni))
+            {
+                Interlocked.Increment(ref _unmatchedHello);
+                return false;
+            }
         }
+        // If the OS already split this ClientHello across TCP packets, its SNI is not fully visible
+        // here. The packet was captured only because its destination IP was resolved from a selected
+        // domain. Use this IP-based fallback rather than silently skipping all segmented hellos.
+        // On shared CDN IPs this is broader than exact-SNI matching, so the UI warns about it.
 
         // The prefix contains the TLS record header plus 1..8 bytes of the handshake header.
         // This is a packet segmentation technique only; it does not provide encryption or a VPN.
